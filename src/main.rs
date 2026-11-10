@@ -20,11 +20,14 @@ async fn main() -> Result<()> {
 
     dotenvy::dotenv().ok();
     let settings = Settings::from_env()?;
+    let pool = db::connect(&settings.database_url).await?;
+    db::migrate(&pool).await?;
 
     let app = Router::new()
+        .merge(api::incomes::router())
         .route("/health", get(api::health::health_check))
         .layer(TraceLayer::new_for_http())
-        .with_state(settings.clone());
+        .with_state(pool);
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", settings.port)).await?;
     tracing::info!("Server listening on http://0.0.0.0:{}", settings.port);
