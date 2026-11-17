@@ -10,13 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-const CATEGORIES: &[&str] = &[
-    "Salary",
-    "Freelance",
-    "Investments",
-    "Business",
-    "Other",
-];
+const CATEGORIES: &[&str] = &["Salary", "Freelance", "Investments", "Business", "Other"];
 const DEFAULT_PAGE_SIZE: u32 = 10;
 const MAX_PAGE_SIZE: u32 = 100;
 
@@ -177,9 +171,7 @@ fn validate_filters(filters: &IncomeFilters) -> Result<(), ApiError> {
         return Err(ApiError::bad_request("Page must be at least 1"));
     }
     if filters.per_page == 0 || filters.per_page > MAX_PAGE_SIZE {
-        return Err(ApiError::bad_request(
-            "Page size must be between 1 and 100",
-        ));
+        return Err(ApiError::bad_request("Page size must be between 1 and 100"));
     }
     if filters
         .category
@@ -188,10 +180,20 @@ fn validate_filters(filters: &IncomeFilters) -> Result<(), ApiError> {
     {
         return Err(ApiError::bad_request("Choose a valid income category"));
     }
-    if filters.q.as_deref().is_some_and(|search| search.chars().count() > 120) {
-        return Err(ApiError::bad_request("Search must be at most 120 characters"));
+    if filters
+        .q
+        .as_deref()
+        .is_some_and(|search| search.chars().count() > 120)
+    {
+        return Err(ApiError::bad_request(
+            "Search must be at most 120 characters",
+        ));
     }
-    if filters.from.zip(filters.to).is_some_and(|(from, to)| from > to) {
+    if filters
+        .from
+        .zip(filters.to)
+        .is_some_and(|(from, to)| from > to)
+    {
         return Err(ApiError::bad_request(
             "The start date must be on or before the end date",
         ));

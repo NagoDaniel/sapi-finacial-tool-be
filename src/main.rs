@@ -1,6 +1,6 @@
+mod api;
 mod config;
 mod db;
-mod api;
 
 use anyhow::Result;
 use axum::{routing::get, Router};
