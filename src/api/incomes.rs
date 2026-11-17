@@ -383,40 +383,158 @@ async fn delete_income(
 mod tests {
     use super::*;
 
-    #[test]
-    fn validates_income_fields() {
-        let valid = IncomeInput {
+    fn valid_input() -> IncomeInput {
+        IncomeInput {
             amount_cents: 1250,
-            source: "  Consulting  ".to_owned(),
+            source: "Consulting".to_owned(),
             category: "Freelance".to_owned(),
-            description: Some("  Client work  ".to_owned()),
+            description: Some("Client work".to_owned()),
             received_on: NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
-        };
-        let normalized = validate_input(valid).unwrap();
-        assert_eq!(normalized.source, "Consulting");
-        assert_eq!(normalized.description.as_deref(), Some("Client work"));
-
-        let invalid = IncomeInput {
-            amount_cents: 0,
-            source: "Salary".to_owned(),
-            category: "Salary".to_owned(),
-            description: None,
-            received_on: NaiveDate::from_ymd_opt(2026, 5, 1).unwrap(),
-        };
-        assert!(validate_input(invalid).is_err());
+        }
     }
 
     #[test]
-    fn validates_listing_sort_and_page_size() {
-        assert_eq!(sort_column("amount").unwrap(), "amount_cents");
-        assert!(sort_column("id; DROP TABLE incomes").is_err());
-        assert_eq!(sort_direction("desc").unwrap(), "DESC");
-        assert!(sort_direction("random").is_err());
+    fn normalizes_valid_income_fields() {
+        let mut valid = valid_input();
+        valid.source = "  Consulting  ".to_owned();
+        valid.category = " Freelance ".to_owned();
+        valid.description = Some("  Client work  ".to_owned());
 
-        let filters = IncomeFilters {
-            per_page: MAX_PAGE_SIZE + 1,
+        let normalized = validate_input(valid).unwrap();
+        assert_eq!(normalized.source, "Consulting");
+        assert_eq!(normalized.category, "Freelance");
+        assert_eq!(normalized.description.as_deref(), Some("Client work"));
+        assert_eq!(normalized.amount_cents, 1250);
+    }
+
+    #[test]
+    fn converts_blank_descriptions_to_none() {
+        let mut input = valid_input();
+        input.description = Some("  \n ".to_owned());
+
+        let normalized = validate_input(input).unwrap();
+        assert_eq!(normalized.description, None);
+    }
+
+    #[test]
+    fn rejects_invalid_income_fields_with_unprocessable_entity() {
+        let mut zero_amount = valid_input();
+        zero_amount.amount_cents = 0;
+        let mut negative_amount = valid_input();
+        negative_amount.amount_cents = -1;
+        let mut empty_source = valid_input();
+        empty_source.source = "  ".to_owned();
+        let mut long_source = valid_input();
+        long_source.source = "s".repeat(121);
+        let mut invalid_category = valid_input();
+        invalid_category.category = "Unknown".to_owned();
+        let mut long_description = valid_input();
+        long_description.description = Some("n".repeat(501));
+
+        for invalid in [
+            zero_amount,
+            negative_amount,
+            empty_source,
+            long_source,
+            invalid_category,
+            long_description,
+        ] {
+            let error = validate_input(invalid).unwrap_err();
+            assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+    }
+
+    #[test]
+    fn accepts_supported_sort_fields_and_orders() {
+        for (requested, expected) in [
+            ("received_on", "received_on"),
+            ("amount", "amount_cents"),
+            ("source", "source"),
+            ("category", "category"),
+            ("created_at", "created_at"),
+        ] {
+            assert_eq!(sort_column(requested).unwrap(), expected);
+        }
+        assert_eq!(sort_direction("asc").unwrap(), "ASC");
+        assert_eq!(sort_direction("desc").unwrap(), "DESC");
+    }
+
+    #[test]
+    fn rejects_untrusted_sort_fields_and_orders() {
+        assert_eq!(sort_column("amount").unwrap(), "amount_cents");
+        for invalid in ["id", "id; DROP TABLE incomes", "amount_cents"] {
+            assert_eq!(
+                sort_column(invalid).unwrap_err().status,
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+        }
+        for invalid in ["random", "DESC", "asc; DROP TABLE incomes"] {
+            assert_eq!(
+                sort_direction(invalid).unwrap_err().status,
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_valid_listing_filters_and_page_size_boundaries() {
+        let first_page = IncomeFilters {
+            per_page: 1,
             ..IncomeFilters::default()
         };
-        assert!(validate_filters(&filters).is_err());
+        assert!(validate_filters(&first_page).is_ok());
+
+        let largest_page = IncomeFilters {
+            per_page: MAX_PAGE_SIZE,
+            ..IncomeFilters::default()
+        };
+        assert!(validate_filters(&largest_page).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_listing_filters() {
+        let start = NaiveDate::from_ymd_opt(2026, 5, 2).unwrap();
+        let end = NaiveDate::from_ymd_opt(2026, 5, 1).unwrap();
+        let invalid_filters = [
+            IncomeFilters {
+                page: 0,
+                ..IncomeFilters::default()
+            },
+            IncomeFilters {
+                per_page: 0,
+                ..IncomeFilters::default()
+            },
+            IncomeFilters {
+                per_page: MAX_PAGE_SIZE + 1,
+                ..IncomeFilters::default()
+            },
+            IncomeFilters {
+                category: Some("Unknown".to_owned()),
+                ..IncomeFilters::default()
+            },
+            IncomeFilters {
+                q: Some("q".repeat(121)),
+                ..IncomeFilters::default()
+            },
+            IncomeFilters {
+                from: Some(start),
+                to: Some(end),
+                ..IncomeFilters::default()
+            },
+        ];
+
+        for filters in invalid_filters {
+            let error = validate_filters(&filters).unwrap_err();
+            assert_eq!(error.status, StatusCode::UNPROCESSABLE_ENTITY);
+        }
+    }
+
+    #[test]
+    fn maps_missing_records_and_database_errors_to_expected_statuses() {
+        assert_eq!(ApiError::not_found().status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            ApiError::internal(sqlx::Error::PoolClosed).status,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
     }
 }
